@@ -1,1 +1,7 @@
 SQLAlchemy
+psycopg2-binary
+requests
+urllib3
+chardet
+certifi
+idna

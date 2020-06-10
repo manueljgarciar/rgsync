@@ -188,3 +188,17 @@ Furthermore, Redis' AOF should be used alongside replication to protect against 
 
 ## Monitoring the RedisGears function registrations
 Use [this](https://github.com/RedisGears/RedisGearsMonitor) to monitor RedisGear's function registrations.
+
+## Fork from the official library RGSYNC 
+Add new functionalities: postgresql and influxdb (v1.8) 
+
+![Initial state before fork](demo/initial_state.JPG)
+
+And the changes are:
+
+![New functionalities](demo/new_functionalities.JPG)
+
+
+
+
+

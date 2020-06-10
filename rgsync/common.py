@@ -13,6 +13,8 @@ OPERATION_UPDATE_NOREPLICATE = '+'
 OPERATIONS = [OPERATION_DEL_REPLICATE, OPERATION_DEL_NOREPLICATE, OPERATION_UPDATE_REPLICATE, OPERATION_UPDATE_NOREPLICATE]
 defaultOperation = OPERATION_UPDATE_REPLICATE
 
+READ_MODE = 'KeysReader' # 'KeysReader'   StreamReader
+  
 def WriteBehindLog(msg, prefix='%s - ' % NAME, logLevel='notice'):
     msg = prefix + msg
     log(msg, level=logLevel)

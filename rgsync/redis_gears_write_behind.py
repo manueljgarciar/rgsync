@@ -20,6 +20,7 @@ def SafeDeleteKey(key):
 def ValidateHash(r):
     key = r['key']
     value = r['value']
+    WriteBehindLog('MANUEL - START ValidateHash the message: ' + str(r))
 
     if value == None:
         # key without value consider delete
@@ -56,6 +57,8 @@ def ValidateHash(r):
     value[OP_KEY] = operation
 
     r['value'] = value
+
+    WriteBehindLog('MANUEL - END ReValidateHashceive the message: ' + str(r))
 
     return True
 
@@ -182,6 +185,7 @@ def CreateAddToStreamFunction(self):
 
 def CreateWriteDataFunction(connector):
     def func(data):
+        WriteBehindLog('MANUEL - CreateWriteDataFunction data: ' + str(data))
         idsToAck = []
         for d in data:
             originalKey = d['value'].pop(ORIGINAL_KEY, None)
@@ -190,11 +194,14 @@ def CreateWriteDataFunction(connector):
                 idsToAck.append('{%s}%s' % (originalKey, uuid))
 
         connector.WriteData(data)
+        WriteBehindLog('MANUEL - CreateWriteDataFunction idsToAck: ' + str(idsToAck))
 
         for idToAck in idsToAck:
-            execute('XADD', idToAck, '*', 'status', 'done')
-            execute('EXPIRE', idToAck, ackExpireSeconds)
-
+            if idToAck is not None:
+                WriteBehindLog('MANUEL - CreateWriteDataFunction idsToAck ENTRAAA')
+                execute('XADD', idToAck, '*', 'status', 'done')
+                execute('EXPIRE', idToAck, ackExpireSeconds)
+    
     return func
 
 class RGWriteBase():
@@ -218,22 +225,26 @@ def DeleteKeyIfNeeded(r):
 def PrepareRecord(r):
     key = r['key']
     value = r['value']
-
-    realKey = key.split('{')[1].split('}')[0]
-
-    realVal = execute('hgetall', realKey)
-    realVal = {realVal[i]:realVal[i + 1] for i in range(0, len(realVal), 2)}
-
-    realVal.update(value)
-
-    # delete temporary key
-    execute('del', key)
+    
+    '''
+    if READ_MODE != 'StreamReader':
+        realKey = key.split('{')[1].split('}')[0]
+        realVal = execute('hgetall', realKey)
+        realVal = {realVal[i]:realVal[i + 1] for i in range(0, len(realVal), 2)}
+        realVal.update(value)
+        # delete temporary key
+        execute('del', key)
+    else:
+    '''
+    realKey = key
+    realVal = value
 
     return {'key': realKey, 'value': realVal}
 
 def TryWriteToTarget(self):
     func = CreateWriteDataFunction(self.connector)
     def f(r):
+        WriteBehindLog('MANUEL -START TryWriteToTarget: ' + str(r))
         key = r['key']
         value = r['value']
         keys = value.keys()
@@ -281,8 +292,13 @@ def UpdateHash(r):
         for k,v in value.items():
             elemets.append(k)
             elemets.append(v)
+        #if READ_MODE != 'StreamReader':
         execute('hset', tempKeyName, *elemets)
         execute('rename', tempKeyName, key)
+        #else:
+        #    execute('xadd', tempKeyName, *elemets)
+        #    execute('rename', tempKeyName, key)
+
     else:
         msg = "Unknown operation"
         WriteBehindLog(msg)
@@ -308,7 +324,7 @@ def WriteNoReplicate(r):
 
 class RGWriteBehind(RGWriteBase):
     def __init__(self, GB, keysPrefix, mappings, connector, name, version=None,
-                 onFailedRetryInterval=5, batch=100, duration=100, transform=lambda r: r, eventTypes=['hset', 'hmset', 'del', 'change']):
+                 onFailedRetryInterval=5, batch=100, duration=100, transform=lambda r: r, eventTypes=['xadd', 'hset', 'hmset', 'del', 'change']):
         '''
         Register a write behind execution to redis gears
 
@@ -377,23 +393,9 @@ class RGWriteBehind(RGWriteBase):
 
         RGWriteBase.__init__(self, mappings, connector, name, version)
 
-        ## create the execution to write each changed key to stream
-        descJson = {
-            'name':'%s.KeysReader' % name,
-            'version':version,
-            'desc':'add each changed key with prefix %s:* to Stream' % keysPrefix,
-        }
-        GB('KeysReader', desc=json.dumps(descJson)).\
-        map(transform).\
-        filter(ValidateHash).\
-        filter(ShouldProcessHash).\
-        foreach(DeleteHashIfNeeded).\
-        foreach(CreateAddToStreamFunction(self)).\
-        register(mode='sync', prefix='%s:*' % keysPrefix, eventTypes=eventTypes)
-
         ## create the execution to write each key from stream to DB
         descJson = {
-            'name':'%s.StreamReader' % name,
+            'name':'%s.StreamReader2' % name,
             'version':version,
             'desc':'read from stream and write to DB table %s' % self.connector.TableName(),
         }
@@ -402,11 +404,26 @@ class RGWriteBehind(RGWriteBase):
         foreach(CreateWriteDataFunction(self.connector)).\
         count().\
         register(prefix='_%s-stream-%s-*' % (self.connector.TableName(), UUID),
-                 mode="async_local",
+                 mode="async_local", # "async_local"
                  batch=batch,
                  duration=duration,
                  onFailedPolicy="retry",
                  onFailedRetryInterval=onFailedRetryInterval)
+
+        ## create the execution to write each changed key to stream
+        descJson = {
+            'name': str(name) + '.' + READ_MODE,
+            'version':version,
+            'desc':'add each changed key with prefix %s:* to Stream' % keysPrefix,
+        }
+        GB(READ_MODE, desc=json.dumps(descJson)).\
+        map(transform).\
+        filter(ValidateHash).\
+        filter(ShouldProcessHash).\
+        foreach(DeleteHashIfNeeded).\
+        foreach(CreateAddToStreamFunction(self)).\
+        register(mode='sync', prefix='%s:*' % keysPrefix, eventTypes=eventTypes)
+
 
 class RGWriteThrough(RGWriteBase):
     def __init__(self, GB, keysPrefix, mappings, connector, name, version=None):
@@ -416,12 +433,12 @@ class RGWriteThrough(RGWriteBase):
         descJson = {
             'name':'%s.KeysReader' % name,
             'version':version,
-            'desc':'write each changed key directly to databse',
+            'desc':'write each changed key directly to database',
         }
-        GB('KeysReader', desc=json.dumps(descJson)).\
+        GB(READ_MODE, desc=json.dumps(descJson)).\
         map(PrepareRecord).\
         filter(ValidateHash).\
         filter(WriteNoReplicate).\
         filter(TryWriteToTarget(self)).\
         foreach(UpdateHash).\
-        register(mode='sync', prefix='%s*' % keysPrefix, eventTypes=['hset', 'hmset'])
+        register(mode='sync', prefix='%s*' % keysPrefix, eventTypes=['xadd', 'hset', 'hmset'])
